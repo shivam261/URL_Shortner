@@ -17,7 +17,7 @@ This application leverages a modern, event-driven AWS architecture to ensure sca
 ## 🚀 Flow of Execution
 ###  Diagrams
 1. Component / Architecture Diagram
-```
+```mermaid
 flowchart LR
     Client([Client])
     
@@ -52,7 +52,7 @@ flowchart LR
 ```
 2. Sequence Diagram
 
-```
+```mermaid
 sequenceDiagram
     actor User
     participant R53 as Route 53
@@ -87,7 +87,7 @@ sequenceDiagram
     end
 ```
 3. Activity Diagram
-```
+```mermaid
 stateDiagram-v2
     [*] --> DNS_Resolution
     DNS_Resolution --> CloudFront_Request
