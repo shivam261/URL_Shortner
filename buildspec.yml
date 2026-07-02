@@ -1,0 +1,25 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Setting up environment... (Dummy install)"
+
+  pre_build:
+    commands:
+      - echo "Running style checks..."
+      - echo "Linting passed successfully."
+
+  build:
+    commands:
+      - echo "Running unit tests..."
+      - echo "All tests passed successfully."
+
+  post_build:
+    commands:
+      - echo "Skeleton pipeline validation complete. Packaging artifacts."
+
+artifacts:
+  files:
+    - '**/*'
+  discard-paths: no
