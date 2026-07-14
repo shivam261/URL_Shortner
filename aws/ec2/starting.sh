@@ -55,3 +55,15 @@ sudo systemctl start nginx
 # Created 'myapp' to exactly match the destination in your appspec.yml
 mkdir -p /home/ec2-user/myapp
 sudo chown -R ec2-user:ec2-user /home/ec2-user/myapp
+# --- FastAPI Log Rotation Setup ---
+# Automatically rotate, compress, and clear app.log daily without crashing Uvicorn
+sudo tee /etc/logrotate.d/fastapi > /dev/null <<'EOF'
+/home/ec2-user/myapp/app.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF

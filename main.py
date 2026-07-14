@@ -1,12 +1,24 @@
-from fastapi import FastAPI
+import os
+from fastapi import FastAPI,Response
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+from dotenv import load_dotenv
+import logging 
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting up...")
+    yield
+    logger.info("Shutting down...")
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
-def root():
-    return {"message": "Hello"}
-
-# Add this endpoint to satisfy validate.sh
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
+async def read_root():
+    """
+    this route return hello from the server
+    """
+    return {"message": "Hello, World!"}

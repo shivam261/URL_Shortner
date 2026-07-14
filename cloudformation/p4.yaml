@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: CloudFormation Template for WebServer behind an ALB with a Free Tier RDS MySQL Database
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access.
+    Type: AWS::EC2::KeyPair::KeyName
+
+  VpcId:
+    Description: Select the VPC where you want to deploy the resources.
+    Type: AWS::EC2::VPC::Id
+
+  Subnets:
+    Description: Select at least TWO subnets from different Availability Zones for the ALB and RDS.
+    Type: List<AWS::EC2::Subnet::Id>
+
+  LatestAmiId:
+    Description: The latest Amazon Linux 2 AMI from the Parameter Store
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t3.micro
+      - t2.micro
+    ConstraintDescription: must be a valid EC2 instance type.
+    
+  MyIP:
+    Description: Your IP address in CIDR format (e.g. 203.0.113.1/32).
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+
+  DBUser:
+    Description: Master username for the RDS Database
+    Type: String
+    MinLength: '4'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+
+  DBPassword:
+    Description: Master password for the RDS Database
+    Type: String
+    NoEcho: true
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: must contain only alphanumeric characters.
+
+Resources:
+  # --- SECURITY GROUPS ---
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP access to ALB from MyIP
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref MyIP
+
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP from ALB and SSH from MyIP
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref MyIP
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow MySQL access ONLY from the WebServer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+
+  # --- LOAD BALANCER ---
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets: !Ref Subnets
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: instance
+      Targets:
+        - Id: !Ref WebServer
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # --- EC2 INSTANCE ---
+
+  WebServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref WebServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: MyALBWebServer
+      UserData: !Base64 |
+        #!/bin/bash
+        yum update -y
+        yum install -y httpd mysql
+        systemctl start httpd
+        systemctl enable httpd
+        echo "<html><body><h1>Hello World from the ALB!</h1></body></html>" > /var/www/html/index.html
+
+  # --- RELATIONAL DATABASE SERVICE (RDS) ---
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets available for the RDS instance
+      SubnetIds: !Ref Subnets
+
+  FreeTierRDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: mysql
+      EngineVersion: '8.0'
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: "20"
+      StorageType: gp2
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups: 
+        - !Ref RDSSecurityGroup
+      MultiAZ: false
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 1
+
+Outputs:
+  WebsiteURL:
+    Description: Website URL of the Application Load Balancer
+    Value: !Join
+      - ''
+      - - http://
+        - !GetAtt ApplicationLoadBalancer.DNSName
+
+  InstancePublicIP:
+    Description: Public IP of the EC2 instance for SSH access
+    Value: !GetAtt WebServer.PublicIp
+
+  RDSEndpointAddress:
+    Description: The connection endpoint for the RDS Database (Use this in your application code)
+    Value: !GetAtt FreeTierRDS.Endpoint.Address

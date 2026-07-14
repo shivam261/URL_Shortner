@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FastAPI Backend Infrastructure: EC2, IAM, and CodeDeploy'
+
+Resources:
+  # 1. IAM ROLE FOR EC2
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # 2. SECURITY GROUP
+  FastAPISecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP and SSH
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  # 3. EC2 INSTANCE WITH USER DATA SCRIPT
+  FastAPIServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-0a0f1259dd1c90938 # Amazon Linux 2023 in ap-south-1
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref FastAPISecurityGroup
+      Tags:
+        - Key: App
+          Value: FastAPI-Backend
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo dnf update -y
+          # Swap Setup
+          sudo fallocate -l 2G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+          
+          # Install dependencies & uv
+          sudo dnf install -y ruby wget nginx curl git
+          sudo -i -u ec2-user bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+          
+          # CodeDeploy Agent
+          cd /home/ec2-user
+          wget https://aws-codedeploy-ap-south-1.s3.ap-south-1.amazonaws.com/latest/install
+          chmod +x ./install
+          sudo ./install auto
+          sudo systemctl enable codedeploy-agent
+          sudo systemctl start codedeploy-agent
+          
+          # Nginx Proxy
+          sudo tee /etc/nginx/conf.d/fastapi.conf > /dev/null <<'EOF'
+          server {
+              listen 80;
+              server_name _;
+              location / {
+                  proxy_pass http://localhost:8000;       
+              }
+          }
+          EOF
+          sudo systemctl enable nginx
+          sudo systemctl start nginx
+          
+          # App Directory
+          mkdir -p /home/ec2-user/myapp
+          sudo chown -R ec2-user:ec2-user /home/ec2-user/myapp
+
+  # 4. IAM ROLE FOR CODEDEPLOY
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+  # 5. CODEDEPLOY APPLICATION & GROUP
+  FastAPIApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: FastAPI-App
+      ComputePlatform: Server
+
+  FastAPIDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref FastAPIApplication
+      DeploymentGroupName: FastAPI-Production
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      Ec2TagFilters:
+        - Key: App
+          Type: KEY_AND_VALUE
+          Value: FastAPI-Backend
+
+Outputs:
+  ServerPublicIP:
+    Description: "The Public IP of the FastAPI Server"
+    Value: !GetAtt FastAPIServer.PublicIp
